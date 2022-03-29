@@ -1,5 +1,8 @@
 #!/usr/bin/python3
 
+import copy
+from typing import List, Set
+from xmlrpc.client import Boolean
 from which_pyqt import PYQT_VER
 if PYQT_VER == 'PYQT5':
 	from PyQt5.QtCore import QLineF, QPointF
@@ -184,7 +187,58 @@ class TSPSolver:
 	'''
 
 	def branchAndBound( self, time_allowance=60.0 ):
-		pass
+		# Graph to represent data
+		cities: List[City] = self._scenario.getCities()
+		edges: List[List[Boolean]] = self._scenario._edge_exists
+
+		# Pick arbitrary node to start from
+		randCityIndex = random.randrange(0, len(cities) - 1)
+
+		# Create the reduced cost matrix
+		matrixList: List[List[int]] = []
+		for row in range(0, len(edges)):
+			matrixList.append([])
+			for col in range(0, len(edges)):
+				if edges[row][col]:
+					matrixList[row].append(cities[row].costTo(cities[col]))
+				else:
+					matrixList[row].append(math.inf)
+
+		matrix = CostMatrix(matrixList, randCityIndex)
+		matrix.reduceMatrix()
+
+		# Get the initial best solution using greedy
+		bssf: TSPSolution = None
+		for i in range(0, 10):
+			greedyResults = self.greedy()
+			if bssf == None or greedyResults['cost'] < bssf.cost:
+				bssf = greedyResults['soln']
+
+		pQueue: List[CostMatrix] = []
+
+		bssfCost = bssf.cost
+		bssfList = []
+		matrix.expandState(pQueue, bssfCost, bssfList)
+		while len(pQueue) > 0:
+			curMatrix = heapq.heappop(pQueue)
+			if curMatrix.lowerBound <= bssfCost:
+				bssfCost, bssfList = curMatrix.expandState(pQueue, bssfCost, bssfList)
+				#curMatrix.expandState(pQueue, bssfCost, bssfList)
+
+		bssfRoute = []
+		if bssfList != []:
+			for cityIndex in bssfList:
+				bssfRoute.append(cities[cityIndex])
+		finalBssf = TSPSolution(bssf.route) if len(bssfRoute) == 0 else TSPSolution(bssfRoute)
+		results = {}
+		results['cost'] = finalBssf.cost 							# Cost of best solution
+		results['time'] = 0						# Time spent to find the best solution
+		results['count'] = 0 				# Total number of solutions found
+		results['soln'] = finalBssf 										# The best solution found
+		results['max'] = None 										# Null
+		results['total'] = None 									# Null
+		results['pruned'] = None 									# Null
+		return results
 
 
 
@@ -199,3 +253,80 @@ class TSPSolver:
 
 	def fancy( self,time_allowance=60.0 ):
 		pass
+
+class CostMatrix:
+	def __init__(self, matrix: List[List[int]], cityIndex):
+		self.matrix = matrix
+		self.lowerBound = 0
+		self.markedRows = []
+		self.markedColumns = []
+		for i in range(0, len(matrix)):
+			self.markedRows.append(False)
+			self.markedColumns.append(False)
+		self.cityIndex = cityIndex
+		self.citiesVisited = [cityIndex]
+		self.markedColumns[cityIndex] = True
+
+	def __lt__(self, other) -> bool:
+		if self.lowerBound < other.lowerBound:
+			return True
+		return False
+
+	def reduceMatrix(self):
+		for row in range(0, len(self.matrix)):
+			if not self.markedRows[row]:
+				minValue = math.inf
+				# Get the minimum for the row
+				for col in range(0, len(self.matrix)):
+					if self.matrix[row][col] < minValue:
+						minValue = self.matrix[row][col]
+				# Reduce the row
+				for col in range(0, len(self.matrix)):
+					self.matrix[row][col] -= minValue
+				# Increment lower-bound
+				self.lowerBound += minValue
+			
+		for col in range(0, len(self.matrix)):
+			if not self.markedColumns[col]:
+				minValue = math.inf
+				# Get the minimum for the column
+				for row in range(0, len(self.matrix)):
+					if self.matrix[row][col] < minValue:
+						minValue = self.matrix[row][col]
+				# Reduce the column
+				for row in range(0, len(self.matrix)):
+					self.matrix[row][col] -= minValue
+				# Increment lower-bound
+				self.lowerBound += minValue
+	
+	# Takes a state, creates its children, if applicable puts them on the queue
+	def expandState(self, pQueue: List, bssfCost, bssfList):
+		# For each city that hasn't already been visited
+		# Create its reduced cost matrix by marking its row and column, setting each entry in the row and column to infinity, then reducing
+		# If the lowerbound is less than the BSSF add it to the queue
+		for i in range(0, len(self.markedColumns)):
+			if not self.markedColumns[i]:
+				childCostMatrix = copy.deepcopy(self)
+				childCostMatrix.markEdge(self.cityIndex, i)
+				childCostMatrix.reduceMatrix()
+				# Check if its a solution
+				if len(childCostMatrix.citiesVisited) == len(childCostMatrix.markedColumns):
+					if childCostMatrix.lowerBound + childCostMatrix.matrix[i][self.citiesVisited[0]] < bssfCost:
+						bssfCost = childCostMatrix.lowerBound + + childCostMatrix.matrix[i][self.citiesVisited[0]]
+						bssfList = childCostMatrix.citiesVisited
+				else:
+					if childCostMatrix.lowerBound <= bssfCost:
+						heapq.heappush(pQueue, childCostMatrix)
+		return bssfCost, bssfList
+
+
+	# Sets the edges to infinite into col and out of row, increments lowerbound, and marks the col and row to not be processed
+	def markEdge(self, row, col):
+		self.lowerBound += self.matrix[row][col]
+		for i in range(0, len(self.matrix)):
+			self.matrix[i][col] = math.inf
+			self.matrix[row][i] = math.inf
+		self.markedRows[row] = True
+		self.markedColumns[col] = True
+		self.citiesVisited.append(col)
+		self.cityIndex = col
