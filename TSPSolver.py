@@ -205,39 +205,59 @@ class TSPSolver:
 					matrixList[row].append(math.inf)
 
 		matrix = CostMatrix(matrixList, randCityIndex)
+
+		# Start my algorithm with the data in the correct format
+		startTime = time.time()
 		matrix.reduceMatrix()
 
-		# Get the initial best solution using greedy
-		bssf: TSPSolution = None
-		for i in range(0, 10):
+		# Get the initial best solution using greedy, run multiple times for solution consistency
+		greedyBssf: TSPSolution = None
+		for i in range(0, 5):
 			greedyResults = self.greedy()
-			if bssf == None or greedyResults['cost'] < bssf.cost:
-				bssf = greedyResults['soln']
+			if greedyBssf == None or greedyResults['cost'] < greedyBssf.cost:
+				greedyBssf = greedyResults['soln']
 
+		# Initialize the priority queue with the initial states
 		pQueue: List[CostMatrix] = []
-
-		bssfCost = bssf.cost
+		bssfCost = greedyBssf.cost
 		bssfList = []
-		matrix.expandState(pQueue, bssfCost, bssfList)
-		while len(pQueue) > 0:
-			curMatrix = heapq.heappop(pQueue)
-			if curMatrix.lowerBound <= bssfCost:
-				bssfCost, bssfList = curMatrix.expandState(pQueue, bssfCost, bssfList)
-				#curMatrix.expandState(pQueue, bssfCost, bssfList)
+		solutionCount = 1
+		pruned = 0
+		childrenCreated = 1
+		maxQueue = 0
+		bssfCost, bssfList, solutionCount, pruned, childrenCreated = matrix.expandState(pQueue, bssfCost, bssfList, solutionCount, pruned, childrenCreated)
 
+		while len(pQueue) > 0 and time.time() - startTime <= time_allowance:
+			if len(pQueue) > maxQueue:
+				maxQueue = len(pQueue)
+			curMatrix = heapq.heappop(pQueue)
+			if curMatrix.lowerBound < bssfCost:
+				bssfCost, bssfList, solutionCount, pruned, childrenCreated = curMatrix.expandState(pQueue, bssfCost, bssfList, solutionCount, pruned, childrenCreated)
+			else:
+				pruned += 1
+
+		endTime = time.time()
+
+		if endTime - startTime >= 60:
+			for matrix in pQueue:
+				if matrix.lowerBound >= bssfCost:
+					pruned += 1
+
+		# Create what the GUI needs to show the new path
 		bssfRoute = []
 		if bssfList != []:
 			for cityIndex in bssfList:
 				bssfRoute.append(cities[cityIndex])
-		finalBssf = TSPSolution(bssf.route) if len(bssfRoute) == 0 else TSPSolution(bssfRoute)
+
+		finalBssf = TSPSolution(greedyBssf.route) if len(bssfRoute) == 0 else TSPSolution(bssfRoute)
 		results = {}
 		results['cost'] = finalBssf.cost 							# Cost of best solution
-		results['time'] = 0						# Time spent to find the best solution
-		results['count'] = 0 				# Total number of solutions found
+		results['time'] = endTime - startTime						# Time spent to find the best solution
+		results['count'] = solutionCount 				# Total number of solutions found
 		results['soln'] = finalBssf 										# The best solution found
-		results['max'] = None 										# Null
-		results['total'] = None 									# Null
-		results['pruned'] = None 									# Null
+		results['max'] = maxQueue 										# Null
+		results['total'] = childrenCreated 									# Null
+		results['pruned'] = pruned 									# Null
 		return results
 
 
@@ -268,7 +288,7 @@ class CostMatrix:
 		self.markedColumns[cityIndex] = True
 
 	def __lt__(self, other) -> bool:
-		if self.lowerBound < other.lowerBound:
+		if self.lowerBound / len(self.citiesVisited) * len(other.citiesVisited) < other.lowerBound:
 			return True
 		return False
 
@@ -300,24 +320,28 @@ class CostMatrix:
 				self.lowerBound += minValue
 	
 	# Takes a state, creates its children, if applicable puts them on the queue
-	def expandState(self, pQueue: List, bssfCost, bssfList):
+	def expandState(self, pQueue: List, bssfCost, bssfList, solutionCount, pruned, childrenCreated):
 		# For each city that hasn't already been visited
 		# Create its reduced cost matrix by marking its row and column, setting each entry in the row and column to infinity, then reducing
 		# If the lowerbound is less than the BSSF add it to the queue
 		for i in range(0, len(self.markedColumns)):
 			if not self.markedColumns[i]:
 				childCostMatrix = copy.deepcopy(self)
+				childrenCreated += 1
 				childCostMatrix.markEdge(self.cityIndex, i)
 				childCostMatrix.reduceMatrix()
 				# Check if its a solution
 				if len(childCostMatrix.citiesVisited) == len(childCostMatrix.markedColumns):
+					solutionCount += 1
 					if childCostMatrix.lowerBound + childCostMatrix.matrix[i][self.citiesVisited[0]] < bssfCost:
-						bssfCost = childCostMatrix.lowerBound + + childCostMatrix.matrix[i][self.citiesVisited[0]]
+						bssfCost = childCostMatrix.lowerBound + childCostMatrix.matrix[i][self.citiesVisited[0]]
 						bssfList = childCostMatrix.citiesVisited
 				else:
-					if childCostMatrix.lowerBound <= bssfCost:
+					if childCostMatrix.lowerBound < bssfCost:
 						heapq.heappush(pQueue, childCostMatrix)
-		return bssfCost, bssfList
+					else:
+						pruned += 1
+		return bssfCost, bssfList, solutionCount, pruned, childrenCreated
 
 
 	# Sets the edges to infinite into col and out of row, increments lowerbound, and marks the col and row to not be processed
